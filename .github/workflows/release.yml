@@ -1,26 +1,54 @@
 name: release
-
 on:
   push:
     tags:
       - "v*"
-
 permissions:
   contents: write
-
 jobs:
-  build:
+  build-windows:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
       - name: install mingw
         run: sudo apt-get install -y mingw-w64
       - name: build
         run: make release
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: klock-windows
+          path: klock.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build app bundle
+        run: make bundle
+      - name: zip app bundle
+        run: ditto -c -k --sequesterRsrc --keepParent Klock.app Klock-macos.zip
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: klock-macos
+          path: Klock-macos.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: klock-windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: klock-macos
       - name: release
         uses: softprops/action-gh-release@v2
         with:
-          files: klock.exe
+          files: |
+            klock.exe
+            Klock-macos.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
