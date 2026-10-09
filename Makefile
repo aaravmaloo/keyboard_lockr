@@ -24,6 +24,10 @@ ICON_GEN = gen_icon.mm
 ICONSET = Klock.iconset
 ICNS = Klock.icns
 
+# "-" = ad-hoc. Set SIGN_ID to a stable certificate name so Accessibility grants survive updates.
+SIGN_ID ?= -
+BUNDLE_ID = com.aaravmaloo.klock
+
 .PHONY: release release-mac icon bundle clean
 
 release:
@@ -44,6 +48,7 @@ bundle: release-mac icon
 	cp $(MAC_TARGET) $(APP_BUNDLE)/Contents/MacOS/$(MAC_TARGET)
 	cp $(PLIST) $(APP_BUNDLE)/Contents/Info.plist
 	cp $(ICNS) $(APP_BUNDLE)/Contents/Resources/$(ICNS)
+	codesign --force --deep -s "$(SIGN_ID)" -i $(BUNDLE_ID) $(APP_BUNDLE)
 	@echo "Built $(APP_BUNDLE) — drag it to /Applications, then open it once."
 
 clean:

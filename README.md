@@ -66,6 +66,8 @@ Produces `Klock.app`. Drag it to `/Applications` and open it once.
 
 You'll need to grant Accessibility permission the first time: **System Settings → Privacy & Security → Accessibility → enable Klock**. This is required by macOS for any app that intercepts system-wide keyboard events — it's not optional and not something the app can skip.
 
+If Klock is in the menu bar but shows **Permission needed**, click it to open the right settings page. If Klock is already listed there but does nothing (this can happen after an update on older builds), select it, press **−** to remove it, then add it again.
+
 "Start at login" is opt-in from the menu — it does not register itself automatically on first run.
 
 

@@ -4,6 +4,7 @@
 // Build:  make bundle   (produces Klock.app)
 // Run:    drag Klock.app to /Applications, then double-click it (or `open Klock.app`)
 // Needs:  System Settings -> Privacy & Security -> Accessibility -> allow Klock.
+//         Without it the app stays in the menu bar and shows "Permission needed" until granted.
 // "Start at login" in the menu uses SMAppService, which only works once this is
 // running from inside a proper .app bundle with a stable path (e.g. /Applications).
 
@@ -20,7 +21,12 @@ static const CGKeyCode kVK_ANSI_X_CODE = 7;
 @property (strong) NSImage *iconLocked;
 @property (strong) NSImage *iconUnlocked;
 @property (strong) NSMenuItem *startupItem;
+@property (strong) NSMenuItem *toggleItem;
+@property (strong) NSMenuItem *permissionItem;
+@property (strong) NSTimer *retryTimer;
 - (void)updateIcon;
+- (void)setPermissionMissing:(BOOL)missing;
+- (void)openPermissionSettings;
 - (void)toggleLock;
 - (void)toggleStartup;
 @end
@@ -87,11 +93,18 @@ static NSImage* DrawTrayIcon(BOOL isLocked) {
         _statusItem.button.image = _iconUnlocked;
 
         NSMenu *menu = [[NSMenu alloc] init];
-        NSMenuItem *toggleItem = [[NSMenuItem alloc] initWithTitle:@"Lock (Cmd+Shift+X)"
-                                                              action:@selector(toggleLock)
-                                                       keyEquivalent:@""];
-        toggleItem.target = self;
-        [menu addItem:toggleItem];
+        _permissionItem = [[NSMenuItem alloc] initWithTitle:@"Permission needed - click to fix"
+                                                      action:@selector(openPermissionSettings)
+                                               keyEquivalent:@""];
+        _permissionItem.target = self;
+        _permissionItem.hidden = YES;
+        [menu addItem:_permissionItem];
+
+        _toggleItem = [[NSMenuItem alloc] initWithTitle:@"Lock (Cmd+Shift+X)"
+                                                  action:@selector(toggleLock)
+                                           keyEquivalent:@""];
+        _toggleItem.target = self;
+        [menu addItem:_toggleItem];
         [menu addItem:[NSMenuItem separatorItem]];
 
         _startupItem = [[NSMenuItem alloc] initWithTitle:@"Start at login"
@@ -116,8 +129,18 @@ static NSImage* DrawTrayIcon(BOOL isLocked) {
 
 - (void)updateIcon {
     self.statusItem.button.image = locked ? self.iconLocked : self.iconUnlocked;
-    NSMenuItem *toggleItem = self.statusItem.menu.itemArray[0];
-    toggleItem.title = locked ? @"Unlock (Cmd+Shift+X)" : @"Lock (Cmd+Shift+X)";
+    self.toggleItem.title = locked ? @"Unlock (Cmd+Shift+X)" : @"Lock (Cmd+Shift+X)";
+}
+
+- (void)setPermissionMissing:(BOOL)missing {
+    self.permissionItem.hidden = !missing;
+    self.toggleItem.enabled = !missing;
+}
+
+// If Klock is already listed but does nothing, the grant is stale (e.g. after an update): remove it with "-", add it again.
+- (void)openPermissionSettings {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:
+        @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]];
 }
 
 - (void)toggleLock {
@@ -179,6 +202,20 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
     return event;
 }
 
+// Creates the event tap if we don't have one yet. Returns false while permission is missing.
+static bool StartEventTap() {
+    if (eventTap) return true;
+    CGEventMask mask = (1 << kCGEventKeyDown) | (1 << kCGEventKeyUp) | (1 << kCGEventFlagsChanged);
+    eventTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
+                                 mask, eventCallback, NULL);
+    if (!eventTap) return false;
+
+    CFRunLoopSourceRef runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0);
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, kCFRunLoopCommonModes);
+    CGEventTapEnable(eventTap, true);
+    return true;
+}
+
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
@@ -186,19 +223,21 @@ int main(int argc, const char * argv[]) {
 
         controller = [[KlockController alloc] init];
 
-        CGEventMask mask = (1 << kCGEventKeyDown) | (1 << kCGEventKeyUp) | (1 << kCGEventFlagsChanged);
-        eventTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
-                                     mask, eventCallback, NULL);
+        // Ask for Accessibility up front (shows the system prompt), then keep the menu bar icon alive
+        // and retry until access is granted, so there is no silent exit and no relaunch needed.
+        NSDictionary *opts = @{ (__bridge id)kAXTrustedCheckOptionPrompt: @YES };
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
 
-        if (!eventTap) {
-            NSLog(@"Failed to create event tap. Grant Accessibility permission in "
-                  @"System Settings -> Privacy & Security -> Accessibility, then re-run.");
-            return 1;
+        if (!StartEventTap()) {
+            NSLog(@"Event tap not available yet. Waiting for Accessibility permission.");
+            [controller setPermissionMissing:YES];
+            controller.retryTimer = [NSTimer scheduledTimerWithTimeInterval:1.5 repeats:YES block:^(NSTimer *t) {
+                if (StartEventTap()) {
+                    [t invalidate];
+                    [controller setPermissionMissing:NO];
+                }
+            }];
         }
-
-        CFRunLoopSourceRef runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0);
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, kCFRunLoopCommonModes);
-        CGEventTapEnable(eventTap, true);
 
         [app run];
     }
